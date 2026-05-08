@@ -11,6 +11,7 @@ import LoginScreen from './LoginScreen';
 import HomeScreen from './HomeScreen';
 import HistoryScreen from './HistoryScreen';
 import DetailScreen from './DetailScreen';
+import AboutScreen from './AboutScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -21,6 +22,8 @@ HomeTabIcon.propTypes = { color: PropTypes.string.isRequired };
 const HistoryTabIcon = ({ color }) => <MaterialIcons name="history" size={24} color={color} />;
 HistoryTabIcon.propTypes = { color: PropTypes.string.isRequired };
 
+const ProfileTabIcon = ({ color }) => <MaterialIcons name="person" size={24} color={color} />;
+ProfileTabIcon.propTypes = { color: PropTypes.string.isRequired };
 function HistoryStack() {
   return (
     <Stack.Navigator>
@@ -56,6 +59,15 @@ function MainTabs() {
         options={{
           tabBarLabel: 'Riwayat',
           tabBarIcon: HistoryTabIcon
+        }}
+      />
+
+      <Tab.Screen
+        name="AboutTab"
+        component={AboutScreen}
+        options={{
+          tabBarLabel: 'Tentang',
+          tabBarIcon: ProfileTabIcon
         }}
       />
     </Tab.Navigator>

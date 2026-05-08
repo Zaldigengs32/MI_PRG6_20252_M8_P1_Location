@@ -24,9 +24,7 @@ export default function LoginScreen() {
 
   const { login } = useContext(AuthContext);
 
-  // const BASE_URL = "http://10.1.9.195:8080/api/user";
-  // const BASE_URL = "http://192.168.56.1:8080/api/user";
-  const BASE_URL = "http://192.168.1.9:8080/api/user";
+  const BASE_URL = "http://10.1.9.195:8080/api/user";
 
   const handleLogin = async () => {
     if (nim.trim() === '' || password.trim() === '') {
