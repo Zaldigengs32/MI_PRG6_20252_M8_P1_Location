@@ -1,50 +1,274 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Alert, Modal, TouchableWithoutFeedback } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Alert, ActivityIndicator, Platform, Modal } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { manipulateAsync, FlipType, SaveFormat } from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system/legacy';
+
+// Komponen custom alert modal agar tampil di dalam app (bukan popup browser)
+function CustomAlert({ visible, title, message, onClose }) {
+    return (
+        <Modal visible={visible} transparent={true} animationType="fade" onRequestClose={onClose}>
+            <View style={alertStyles.overlay}>
+                <View style={alertStyles.box}>
+                    <Text style={alertStyles.title}>{title}</Text>
+                    <Text style={alertStyles.message}>{message}</Text>
+                    <TouchableOpacity style={alertStyles.button} onPress={onClose}>
+                        <Text style={alertStyles.buttonText}>OK</Text>
+                    </TouchableOpacity>
+                </View>
+            </View>
+        </Modal>
+    );
+}
+
+const alertStyles = StyleSheet.create({
+    overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+    box: { backgroundColor: 'white', borderRadius: 12, padding: 24, width: '80%', maxWidth: 320, elevation: 10 },
+    title: { fontSize: 18, fontWeight: 'bold', marginBottom: 10, color: '#1a1a1a' },
+    message: { fontSize: 15, color: '#444', marginBottom: 20, lineHeight: 22 },
+    button: { alignSelf: 'flex-end' },
+    buttonText: { fontSize: 15, fontWeight: 'bold', color: '#0056b3' },
+});
 
 export default function AboutScreen() {
     const [permission, requestPermission] = useCameraPermissions();
     const [isCameraOpen, setIsCameraOpen] = useState(false);
-    const [profilePhoto, setProfilePhoto] = useState(null);
+    const [mahasiswa, setMahasiswa] = useState(null);
+    const [isLoading, setIsLoading] = useState(true);
     const [isViewingPhoto, setIsViewingPhoto] = useState(false);
+    const [lastUploadTime, setLastUploadTime] = useState(0);
+    const [imageKey, setImageKey] = useState(0);
+
+    // State untuk custom alert
+    const [alertVisible, setAlertVisible] = useState(false);
+    const [alertTitle, setAlertTitle] = useState('');
+    const [alertMessage, setAlertMessage] = useState('');
 
     const cameraRef = useRef(null);
 
-    const STORAGE_KEY = '@profile_photo';
+    const NIM_USER = "0320240040";
+    const BASE_URL = "http://192.168.1.5:8080/api/mahasiswa";
 
     useEffect(() => {
-        loadProfilePhoto();
+        fetchMahasiswa();
     }, []);
 
-    const loadProfilePhoto = async () => {
-        try {
-            const savedPhotoUri = await AsyncStorage.getItem(STORAGE_KEY);
-            if (savedPhotoUri !== null) {
-                setProfilePhoto(savedPhotoUri);
-            }
-        } catch (error) {
-            console.error("Gagal memuat foto profil", error);
+    // Tampilkan custom alert di web, Alert.alert di mobile
+    const showAlert = (title, message) => {
+        if (Platform.OS === 'web') {
+            setAlertTitle(title);
+            setAlertMessage(message);
+            setAlertVisible(true);
+        } else {
+            Alert.alert(title, message);
         }
+    };
+
+    const validateFile = async (uri) => {
+        try {
+            let fileSizeInBytes = 0;
+
+            if (Platform.OS === 'web') {
+                if (uri.startsWith('data:')) {
+                    const base64Data = uri.split(',')[1];
+                    fileSizeInBytes = Math.ceil((base64Data.length * 3) / 4);
+                } else {
+                    const response = await fetch(uri);
+                    const blob = await response.blob();
+                    fileSizeInBytes = blob.size;
+                }
+            } else {
+                const fileInfo = await FileSystem.getInfoAsync(uri);
+                fileSizeInBytes = fileInfo.size;
+            }
+
+            const fileSizeInMB = fileSizeInBytes / (1024 * 1024);
+
+            if (fileSizeInMB > 5) {
+                showAlert("Error", "Ukuran file maksimal 5MB. File Anda: " + fileSizeInMB.toFixed(2) + "MB");
+                return false;
+            }
+
+            if (uri.startsWith('data:')) {
+                const mimeType = uri.split(';')[0].split(':')[1];
+                const allowedMimes = ['image/jpeg', 'image/png', 'image/webp'];
+                if (!allowedMimes.includes(mimeType)) {
+                    showAlert("Error", "Tipe file tidak didukung. Gunakan: JPG, PNG, atau WEBP");
+                    return false;
+                }
+            } else {
+                const fileExtension = uri.split('.').pop().toLowerCase().split('?')[0];
+                const allowedTypes = ['jpg', 'jpeg', 'png', 'webp'];
+                if (!allowedTypes.includes(fileExtension)) {
+                    showAlert("Error", "Tipe file tidak didukung. Gunakan: JPG, JPEG, PNG, atau WEBP");
+                    return false;
+                }
+            }
+
+            return true;
+        } catch (error) {
+            console.error("Error validating file:", error);
+            showAlert("Error", "Gagal memvalidasi file");
+            return false;
+        }
+    };
+
+    const canUpload = () => {
+        const now = Date.now();
+        const timeDiff = now - lastUploadTime;
+        const minInterval = 5000;
+
+        if (timeDiff < minInterval) {
+            const remainingTime = Math.ceil((minInterval - timeDiff) / 1000);
+            showAlert("Info", `Tunggu ${remainingTime} detik sebelum upload lagi`);
+            return false;
+        }
+
+        setLastUploadTime(now);
+        return true;
+    };
+
+    const flipImageHorizontalWeb = (uri) => {
+        return new Promise((resolve, reject) => {
+            const img = new window.Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.translate(img.width, 0);
+                ctx.scale(-1, 1);
+                ctx.drawImage(img, 0, 0);
+                resolve(canvas.toDataURL('image/jpeg', 0.8));
+            };
+            img.onerror = reject;
+            img.src = uri;
+        });
     };
 
     const takePicture = async () => {
         if (cameraRef.current) {
             try {
-                const photo = await cameraRef.current.takePictureAsync({ quality: 0.5 });
+                const photo = await cameraRef.current.takePictureAsync({ quality: 0.3 });
+                console.log("Photo taken:", photo.uri);
 
-                setProfilePhoto(photo.uri);
-
-                await AsyncStorage.setItem(STORAGE_KEY, photo.uri);
-
-                setIsCameraOpen(false);
-
-                Alert.alert("Berhasil", "Foto profil berhasil diperbarui!");
+                if (Platform.OS === 'web') {
+                    try {
+                        const flippedUri = await flipImageHorizontalWeb(photo.uri);
+                        uploadPhoto(flippedUri);
+                    } catch (flipError) {
+                        console.error("Gagal flip gambar:", flipError);
+                        uploadPhoto(photo.uri);
+                    }
+                } else {
+                    // Foto dari kamera front di mobile sudah tidak mirror (hanya preview yang mirror)
+                    uploadPhoto(photo.uri);
+                }
             } catch (error) {
-                Alert.alert("Error", "Gagal mengambil foto selfie.");
+                console.error("Gagal mengambil gambar:", error);
+                showAlert("Error", "Gagal mengambil gambar. Silakan coba lagi.");
             }
         }
     };
+
+    const fetchMahasiswa = async () => {
+        try {
+            console.log("Fetching mahasiswa data from:", `${BASE_URL}/${NIM_USER}`);
+            const response = await fetch(`${BASE_URL}/${NIM_USER}`);
+            console.log("Fetch response status:", response.status);
+
+            if (response.ok) {
+                const data = await response.json();
+                console.log("Mahasiswa data received:", data);
+                console.log("Photo data length:", data.fotoMhs ? data.fotoMhs.length : 'No photo');
+                setMahasiswa(data);
+                setImageKey(prev => prev + 1);
+                console.log("Image key updated to:", imageKey + 1);
+            } else if (response.status === 404) {
+                showAlert("Data Tidak Ditemukan", `NIM ${NIM_USER} tidak terdaftar dalam database. Silakan hubungi administrator.`);
+            } else {
+                showAlert("Error Server", `Gagal mengambil data mahasiswa. Status: ${response.status}`);
+            }
+        } catch (error) {
+            console.error("Fetch Error:", error);
+            showAlert("Koneksi Error", "Tidak dapat terhubung ke server. Periksa koneksi internet Anda.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const uploadPhoto = async (uri) => {
+        if (!canUpload()) return;
+
+        const isValidFile = await validateFile(uri);
+        if (!isValidFile) return;
+
+        setIsLoading(true);
+
+        const formData = new FormData();
+        formData.append('nim', NIM_USER);
+        formData.append('nama', 'Muhamad Zaldi Aprialdi');
+
+        if (Platform.OS === 'web') {
+            let blob;
+            if (uri.startsWith('data:')) {
+                const mimeType = uri.split(';')[0].split(':')[1];
+                const base64Data = uri.split(',')[1];
+                const byteChars = atob(base64Data);
+                const byteArray = new Uint8Array(byteChars.length);
+                for (let i = 0; i < byteChars.length; i++) {
+                    byteArray[i] = byteChars.charCodeAt(i);
+                }
+                blob = new Blob([byteArray], { type: mimeType });
+            } else {
+                const res = await fetch(uri);
+                blob = await res.blob();
+            }
+            const ext = blob.type.split('/')[1] || 'jpg';
+            formData.append('foto', blob, `selfie.${ext}`);
+        } else {
+            formData.append('foto', {
+                uri: uri,
+                name: 'selfie.jpg',
+                type: 'image/jpeg',
+            });
+        }
+
+        try {
+            console.log("Uploading to:", `${BASE_URL}/upload`);
+            console.log("FormData contents:");
+            formData.forEach((value, key) => {
+                console.log(key, value);
+            });
+
+            const response = await fetch(`${BASE_URL}/upload`, {
+                method: 'POST',
+                body: formData,
+            });
+
+            console.log("Server response status:", response.status);
+            console.log("Server response headers:", response.headers);
+
+            if (response.ok) {
+                const responseData = await response.text();
+                console.log("Server response data:", responseData);
+                showAlert("Sukses", "Foto profil tersinkronisasi ke Server!");
+                fetchMahasiswa();
+            } else {
+                const errorData = await response.text();
+                console.error("Server error response:", errorData);
+                showAlert("Error", `Gagal mengunggah foto ke server. Status: ${response.status}`);
+            }
+        } catch (error) {
+            showAlert("Error", "Gagal mengunggah foto ke server.");
+            console.error("Upload Error:", error);
+        } finally {
+            setIsLoading(false);
+            setIsCameraOpen(false);
+        }
+    };
+
+    if (isLoading) return <ActivityIndicator size="large" style={{ flex: 1 }} />;
 
     if (isCameraOpen) {
         if (!permission) return <View style={styles.container}><Text>Memuat perizinan...</Text></View>;
@@ -64,21 +288,14 @@ export default function AboutScreen() {
 
         return (
             <View style={styles.container}>
-                <CameraView 
-                    style={StyleSheet.absoluteFillObject} 
-                    facing="front"
-                    mirror={false}
-                    ref={cameraRef}
-                />
+                <CameraView style={StyleSheet.absoluteFillObject} facing="front" mirror={true} ref={cameraRef} />
                 <View style={styles.cameraOverlay}>
-                    <View style={styles.captureContainer}>
-                        <TouchableOpacity style={styles.captureButton} onPress={takePicture}>
-                            <Text style={styles.captureButtonText}>Jepret</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.cancelButton} onPress={() => setIsCameraOpen(false)}>
-                            <Text style={styles.buttonText}>Batal</Text>
-                        </TouchableOpacity>
-                    </View>
+                    <TouchableOpacity style={styles.captureButton} onPress={takePicture}>
+                        <Text style={styles.captureButtonText}>Ambil & Kirim</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setIsCameraOpen(false)}>
+                        <Text style={{ color: 'white', marginBottom: 20 }}>Batal</Text>
+                    </TouchableOpacity>
                 </View>
             </View>
         );
@@ -86,183 +303,64 @@ export default function AboutScreen() {
 
     return (
         <View style={styles.container}>
+            {/* Custom Alert Modal */}
+            <CustomAlert
+                visible={alertVisible}
+                title={alertTitle}
+                message={alertMessage}
+                onClose={() => setAlertVisible(false)}
+            />
+
             <View style={styles.profileCard}>
-                
-                <View style={styles.imageContainer}>
-                    {profilePhoto ? (
-                        <TouchableOpacity style={{ width: '100%', height: '100%' }} onPress={() => setIsViewingPhoto(true)}>
-                            <Image source={{ uri: profilePhoto }} style={styles.profileImage} />
-                        </TouchableOpacity>
-                    ) : (
-                        <View style={styles.placeholderImage}>
-                            <Text style={styles.placeholderText}>Belum Ada Foto</Text>
-                        </View>
-                    )}
-                </View>
-
-                <Text style={styles.nameText}>Muhamad Zaldi Aprialdi</Text>
-                <Text style={styles.nimText}>NIM: 0325260031</Text>
-                <Text style={styles.programText}>Manajemen Informatika</Text>
-
-                <TouchableOpacity
-                    style={styles.button}
-                    onPress={() => setIsCameraOpen(true)}
-                >
-                    <Text style={styles.buttonText}>
-                        {profilePhoto ? "Ganti Foto Profil" : "Ambil Foto Profil"}
-                    </Text>
+                <TouchableOpacity onPress={() => setIsViewingPhoto(true)}>
+                    <Image
+                        key={`profile-${imageKey}`}
+                        source={mahasiswa?.fotoMhs
+                            ? { uri: `data:image/jpeg;base64,${mahasiswa.fotoMhs}` }
+                            : { uri: `https://i.pravatar.cc/150?img=3&t=${Date.now()}` }
+                        }
+                        style={styles.profileImage}
+                    />
                 </TouchableOpacity>
+                <Text style={styles.nameText}>{mahasiswa?.namaMhs || "Muhamad Zaldi Aprialdi"}</Text>
+                <Text style={styles.nimText}>{NIM_USER}</Text>
 
+                <TouchableOpacity style={styles.button} onPress={() => setIsCameraOpen(true)}>
+                    <Text style={styles.buttonText}>Ganti Foto Selfie</Text>
+                </TouchableOpacity>
             </View>
 
+            {/* Modal lihat foto fullscreen */}
             <Modal visible={isViewingPhoto} transparent={true} animationType="fade" onRequestClose={() => setIsViewingPhoto(false)}>
-                <TouchableWithoutFeedback onPress={() => setIsViewingPhoto(false)}>
-                    <View style={styles.modalBackground}>
-                        <TouchableWithoutFeedback onPress={() => {}}>
-                            <Image source={{ uri: profilePhoto }} style={styles.fullScreenImage} />
-                        </TouchableWithoutFeedback>
-                    </View>
-                </TouchableWithoutFeedback>
+                <TouchableOpacity style={styles.modalBackground} activeOpacity={1} onPress={() => setIsViewingPhoto(false)}>
+                    <Image
+                        key={`modal-${imageKey}`}
+                        source={mahasiswa?.fotoMhs
+                            ? { uri: `data:image/jpeg;base64,${mahasiswa.fotoMhs}` }
+                            : { uri: `https://i.pravatar.cc/150?img=3&t=${Date.now()}` }
+                        }
+                        resizeMode="contain"
+                        style={styles.fullScreenImage}
+                    />
+                </TouchableOpacity>
             </Modal>
-
         </View>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#f4f6f9',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    profileCard: {
-        backgroundColor: 'white',
-        width: '85%',
-        padding: 30,
-        borderRadius: 20,
-        alignItems: 'center',
-        elevation: 5,
-        shadowColor: '#000',
-        shadowOpacity: 0.2,
-        shadowRadius: 10,
-    },
-    imageContainer: {
-        marginBottom: 20,
-        width: 150,
-        height: 150,
-        borderRadius: 75,
-        overflow: 'hidden',
-    },
-    profileImage: {
-        width: '100%',
-        height: '100%',
-        borderRadius: 75,
-        borderWidth: 3,
-        borderColor: '#0056b3',
-        transform: [{ scaleX: -1 }],
-    },
-    placeholderImage: {
-        width: 150,
-        height: 150,
-        borderRadius: 75,
-        backgroundColor: '#e9ecef',
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 3,
-        borderColor: '#ced4da',
-        borderStyle: 'dashed',
-    },
-    placeholderText: {
-        color: '#6c757d',
-        fontWeight: 'bold',
-    },
-    nameText: {
-        fontSize: 22,
-        fontWeight: 'bold',
-        color: '#333',
-        marginBottom: 5,
-        textAlign: 'center',
-    },
-    nimText: {
-        fontSize: 16,
-        color: '#666',
-        marginBottom: 5,
-    },
-    programText: {
-        fontSize: 14,
-        color: '#0056b3',
-        fontWeight: 'bold',
-        marginBottom: 25,
-        textAlign: 'center',
-    },
-    button: {
-        backgroundColor: '#0056b3',
-        paddingVertical: 12,
-        paddingHorizontal: 25,
-        borderRadius: 10,
-        width: '100%',
-        alignItems: 'center',
-    },
-    buttonDanger: {
-        backgroundColor: '#dc3545',
-        paddingVertical: 12,
-        paddingHorizontal: 25,
-        borderRadius: 10,
-        width: '100%',
-        alignItems: 'center',
-        marginTop: 10,
-    },
-    buttonText: {
-        color: 'white',
-        fontWeight: 'bold',
-        fontSize: 16,
-    },
-    infoText: {
-        textAlign: 'center',
-        marginBottom: 20,
-        fontSize: 16,
-    },
-
-    cameraOverlay: {
-        ...StyleSheet.absoluteFillObject,
-        backgroundColor: 'transparent',
-        justifyContent: 'flex-end',
-    },
-    captureContainer: {
-        flexDirection: 'row',
-        justifyContent: 'space-evenly',
-        alignItems: 'center',
-        marginBottom: 40,
-    },
-    captureButton: {
-        backgroundColor: 'white',
-        paddingVertical: 15,
-        paddingHorizontal: 30,
-        borderRadius: 30,
-        elevation: 5,
-    },
-    captureButtonText: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: 'black',
-    },
-    cancelButton: {
-        backgroundColor: 'rgba(0,0,0,0.6)',
-        paddingVertical: 15,
-        paddingHorizontal: 30,
-        borderRadius: 30,
-    },
-    modalBackground: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.8)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    fullScreenImage: {
-        width: '90%',
-        height: '60%',
-        resizeMode: 'contain',
-        transform: [{ scaleX: -1 }],
-    }
+    container: { flex: 1, backgroundColor: '#f4f6f9', justifyContent: 'center', alignItems: 'center' },
+    profileCard: { backgroundColor: 'white', width: '85%', padding: 30, borderRadius: 20, alignItems: 'center', elevation: 5 },
+    profileImage: { width: 150, height: 150, borderRadius: 75, marginBottom: 20, borderWidth: 2, borderColor: '#0056b3' },
+    nameText: { fontSize: 20, fontWeight: 'bold' },
+    nimText: { fontSize: 16, color: 'gray', marginBottom: 20 },
+    button: { backgroundColor: '#0056b3', padding: 10, borderRadius: 10, width: '100%', alignItems: 'center' },
+    buttonText: { color: 'white', fontWeight: 'bold' },
+    cameraOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'flex-end', alignItems: 'center', backgroundColor: 'transparent' },
+    captureButton: { backgroundColor: 'white', padding: 15, borderRadius: 30, marginBottom: 20 },
+    captureButtonText: { fontWeight: 'bold' },
+    buttonDanger: { backgroundColor: '#dc3545', padding: 10, borderRadius: 10, width: '100%', alignItems: 'center', marginTop: 10 },
+    infoText: { textAlign: 'center', marginBottom: 20, fontSize: 16 },
+    modalBackground: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center' },
+    fullScreenImage: { width: '90%', height: '60%' },
 });

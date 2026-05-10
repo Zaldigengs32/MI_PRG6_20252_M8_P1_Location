@@ -12,7 +12,7 @@ export default function MapScreen() {
     }));
 
     useEffect(() => {
-        const end = Date.now(); // ⏱ selesai
+        const end = Date.now();
         console.log("Waktu render:", end - start, "ms");
     }, []);
 

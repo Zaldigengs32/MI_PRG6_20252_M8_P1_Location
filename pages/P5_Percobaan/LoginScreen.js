@@ -24,7 +24,42 @@ export default function LoginScreen() {
 
   const { login } = useContext(AuthContext);
 
-  const BASE_URL = "http://10.1.9.195:8080/api/user";
+  const BASE_URL = "http://192.168.1.5:8080/api/user";
+
+  const fetchWithTimeout = async (url, options, timeout = 10000) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    
+    try {
+        const response = await fetch(url, {
+            ...options,
+            signal: controller.signal
+        });
+        clearTimeout(id);
+        return response;
+    } catch (error) {
+        clearTimeout(id);
+        if (error.name === 'AbortError') {
+            throw new Error('Connection timeout - Server tidak merespon dalam 10 detik');
+        }
+        throw error;
+    }
+  };
+
+  const retryRequest = async (url, options, maxRetries = 3, delay = 1000) => {
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        const response = await fetchWithTimeout(url, options);
+        return response;
+      } catch (error) {
+        if (i === maxRetries - 1) throw error;
+        
+        console.log(`Retry attempt ${i + 1}/${maxRetries} after ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        delay *= 2;
+      }
+    }
+  };
 
   const handleLogin = async () => {
     if (nim.trim() === '' || password.trim() === '') {
@@ -35,7 +70,7 @@ export default function LoginScreen() {
     setIsLoading(true);
 
     try {
-      const response = await fetch(`${BASE_URL}/login`, {
+      const response = await retryRequest(`${BASE_URL}/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -63,9 +98,19 @@ export default function LoginScreen() {
         Alert.alert("Error", result.message || "Terjadi kesalahan");
       }
     } catch (error) {
+      let errorMessage = "Tidak dapat terhubung ke server.";
+      
+      if (error.message.includes('timeout')) {
+        errorMessage = "Connection timeout - Server tidak merespon. Coba lagi beberapa saat.";
+      } else if (error.message.includes('Failed to fetch')) {
+        errorMessage = "Server tidak dapat dijangkau. Periksa koneksi internet dan IP server.";
+      } else if (error.message.includes('Network request failed')) {
+        errorMessage = "Koneksi internet bermasalah. Periksa WiFi/data Anda.";
+      }
+      
       Alert.alert(
         "Error Jaringan",
-        "Tidak dapat terhubung ke server. Pastikan backend berjalan dan IP sudah benar.\n\nError: " + error.message
+        `${errorMessage}\n\nDetail: ${error.message}\n\nIP Server: ${BASE_URL}`
       );
     } finally {
       setIsLoading(false);
