@@ -4,7 +4,6 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { manipulateAsync, FlipType, SaveFormat } from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 
-// Komponen custom alert modal agar tampil di dalam app (bukan popup browser)
 function CustomAlert({ visible, title, message, onClose }) {
     return (
         <Modal visible={visible} transparent={true} animationType="fade" onRequestClose={onClose}>
@@ -38,8 +37,6 @@ export default function AboutScreen() {
     const [isViewingPhoto, setIsViewingPhoto] = useState(false);
     const [lastUploadTime, setLastUploadTime] = useState(0);
     const [imageKey, setImageKey] = useState(0);
-
-    // State untuk custom alert
     const [alertVisible, setAlertVisible] = useState(false);
     const [alertTitle, setAlertTitle] = useState('');
     const [alertMessage, setAlertMessage] = useState('');
@@ -53,7 +50,6 @@ export default function AboutScreen() {
         fetchMahasiswa();
     }, []);
 
-    // Tampilkan custom alert di web, Alert.alert di mobile
     const showAlert = (title, message) => {
         if (Platform.OS === 'web') {
             setAlertTitle(title);
@@ -107,7 +103,6 @@ export default function AboutScreen() {
 
             return true;
         } catch (error) {
-            console.error("Error validating file:", error);
             showAlert("Error", "Gagal memvalidasi file");
             return false;
         }
@@ -150,22 +145,18 @@ export default function AboutScreen() {
         if (cameraRef.current) {
             try {
                 const photo = await cameraRef.current.takePictureAsync({ quality: 0.3 });
-                console.log("Photo taken:", photo.uri);
 
                 if (Platform.OS === 'web') {
                     try {
                         const flippedUri = await flipImageHorizontalWeb(photo.uri);
                         uploadPhoto(flippedUri);
                     } catch (flipError) {
-                        console.error("Gagal flip gambar:", flipError);
                         uploadPhoto(photo.uri);
                     }
                 } else {
-                    // Foto dari kamera front di mobile sudah tidak mirror (hanya preview yang mirror)
                     uploadPhoto(photo.uri);
                 }
             } catch (error) {
-                console.error("Gagal mengambil gambar:", error);
                 showAlert("Error", "Gagal mengambil gambar. Silakan coba lagi.");
             }
         }
@@ -173,24 +164,18 @@ export default function AboutScreen() {
 
     const fetchMahasiswa = async () => {
         try {
-            console.log("Fetching mahasiswa data from:", `${BASE_URL}/${NIM_USER}`);
             const response = await fetch(`${BASE_URL}/${NIM_USER}`);
-            console.log("Fetch response status:", response.status);
 
             if (response.ok) {
                 const data = await response.json();
-                console.log("Mahasiswa data received:", data);
-                console.log("Photo data length:", data.fotoMhs ? data.fotoMhs.length : 'No photo');
                 setMahasiswa(data);
                 setImageKey(prev => prev + 1);
-                console.log("Image key updated to:", imageKey + 1);
             } else if (response.status === 404) {
                 showAlert("Data Tidak Ditemukan", `NIM ${NIM_USER} tidak terdaftar dalam database. Silakan hubungi administrator.`);
             } else {
                 showAlert("Error Server", `Gagal mengambil data mahasiswa. Status: ${response.status}`);
             }
         } catch (error) {
-            console.error("Fetch Error:", error);
             showAlert("Koneksi Error", "Tidak dapat terhubung ke server. Periksa koneksi internet Anda.");
         } finally {
             setIsLoading(false);
@@ -235,33 +220,19 @@ export default function AboutScreen() {
         }
 
         try {
-            console.log("Uploading to:", `${BASE_URL}/upload`);
-            console.log("FormData contents:");
-            formData.forEach((value, key) => {
-                console.log(key, value);
-            });
-
             const response = await fetch(`${BASE_URL}/upload`, {
                 method: 'POST',
                 body: formData,
             });
 
-            console.log("Server response status:", response.status);
-            console.log("Server response headers:", response.headers);
-
             if (response.ok) {
-                const responseData = await response.text();
-                console.log("Server response data:", responseData);
                 showAlert("Sukses", "Foto profil tersinkronisasi ke Server!");
                 fetchMahasiswa();
             } else {
-                const errorData = await response.text();
-                console.error("Server error response:", errorData);
                 showAlert("Error", `Gagal mengunggah foto ke server. Status: ${response.status}`);
             }
         } catch (error) {
             showAlert("Error", "Gagal mengunggah foto ke server.");
-            console.error("Upload Error:", error);
         } finally {
             setIsLoading(false);
             setIsCameraOpen(false);
@@ -303,7 +274,6 @@ export default function AboutScreen() {
 
     return (
         <View style={styles.container}>
-            {/* Custom Alert Modal */}
             <CustomAlert
                 visible={alertVisible}
                 title={alertTitle}
@@ -330,7 +300,6 @@ export default function AboutScreen() {
                 </TouchableOpacity>
             </View>
 
-            {/* Modal lihat foto fullscreen */}
             <Modal visible={isViewingPhoto} transparent={true} animationType="fade" onRequestClose={() => setIsViewingPhoto(false)}>
                 <TouchableOpacity style={styles.modalBackground} activeOpacity={1} onPress={() => setIsViewingPhoto(false)}>
                     <Image
